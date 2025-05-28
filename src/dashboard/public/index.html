@@ -15,7 +15,6 @@
         </header>
 
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <!-- Summary Cards -->
             <div class="bg-white rounded-lg shadow p-6">
                 <h2 class="text-xl font-semibold mb-4">Total Bots</h2>
                 <p class="text-4xl font-bold text-blue-600" id="totalBots">0</p>
@@ -30,7 +29,6 @@
             </div>
         </div>
 
-        <!-- Bot List -->
         <div class="mt-8 bg-white rounded-lg shadow">
             <div class="p-6">
                 <h2 class="text-xl font-semibold mb-4">Bot Status</h2>
@@ -46,26 +44,23 @@
                             </tr>
                         </thead>
                         <tbody id="botList" class="bg-white divide-y divide-gray-200">
-                            <!-- Bot rows will be inserted here -->
                         </tbody>
                     </table>
                 </div>
             </div>
         </div>
 
-        <!-- Error Logs -->
         <div class="mt-8 bg-white rounded-lg shadow">
             <div class="p-6">
                 <h2 class="text-xl font-semibold mb-4">Error Logs</h2>
                 <div class="overflow-y-auto max-h-64" id="errorLogs">
-                    <!-- Error logs will be inserted here -->
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        const POLL_INTERVAL = 5000; // 5 seconds
+        const POLL_INTERVAL = 5000; 
 
         function updateBotList(bots) {
             const botList = document.getElementById('botList');
@@ -99,12 +94,10 @@
                 botList.appendChild(row);
             });
 
-            // Update summary cards
             document.getElementById('totalBots').textContent = bots.length;
             document.getElementById('activeBots').textContent = bots.filter(b => b.status === 'active').length;
             document.getElementById('errorCount').textContent = bots.reduce((acc, b) => acc + b.error_count, 0);
 
-            // Update error logs
             const errorLogs = document.getElementById('errorLogs');
             errorLogs.innerHTML = '';
             bots.forEach(bot => {
@@ -151,7 +144,6 @@
             }
         }
 
-        // Initial poll and start polling interval
         pollBots();
         setInterval(pollBots, POLL_INTERVAL);
     </script>

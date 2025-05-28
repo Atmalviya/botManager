@@ -12,14 +12,13 @@ app.use(cors());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Connect to Redis and MongoDB
 connectRedis();
 connectDB();
 
-// API Routes
 app.get('/api/bots', async (req, res) => {
     try {
         const bots = await Bot.find();
+        console.log("Bots:", bots);
         res.json(bots);
     } catch (error) {
         res.status(500).json({ error: error.message });
@@ -31,7 +30,6 @@ app.post('/api/bots/:bot_id/command', async (req, res) => {
     const { command } = req.body;
 
     try {
-        // Forward command to Bot Manager
         const response = await fetch(`http://localhost:${process.env.BOT_MANAGER_PORT}/api/bots/${bot_id}/command`, {
             method: 'POST',
             headers: {
@@ -47,7 +45,6 @@ app.post('/api/bots/:bot_id/command', async (req, res) => {
     }
 });
 
-// Serve the dashboard HTML
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });

@@ -1,6 +1,4 @@
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
 const cors = require('cors');
 const { redisClient, connectRedis } = require('../config/redis');
 const connectDB = require('../config/db');
@@ -8,153 +6,132 @@ const Bot = require('../models/Bot');
 require('dotenv').config();
 
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-    cors: {
-        origin: "*",
-        methods: ["GET", "POST"]
-    }
-});
 
 app.use(cors());
 app.use(express.json());
 
-// Connect to Redis and MongoDB
 connectRedis();
 connectDB();
 
-// Socket.IO connection handling
-io.on('connection', (socket) => {
-    console.log('Client connected:', socket.id);
+const apiRouter = express.Router();
 
-    // Handle bot registration
-    socket.on('register', async (data) => {
-        try {
-            const { bot_id, name } = data;
-            
-            // Update or create bot in MongoDB
-            await Bot.findOneAndUpdate(
-                { bot_id },
-                { 
-                    bot_id,
-                    name,
-                    status: 'active',
-                    last_heartbeat: new Date()
-                },
-                { upsert: true }
-            );
-
-            // Update Redis
-            await redisClient.hSet(`bot:${bot_id}`, {
+apiRouter.post('/register', async (req, res) => {
+    try {
+        const { bot_id, name } = req.body;
+        
+        await redisClient.set(`bot:${bot_id}:status`, 'active');
+        await redisClient.set(`bot:${bot_id}:last_seen`, Date.now());
+        await redisClient.sAdd('bots:all', bot_id);
+        
+        await Bot.findOneAndUpdate(
+            { bot_id },
+            { 
+                bot_id,
+                name,
                 status: 'active',
-                last_seen: Date.now()
-            });
+                last_heartbeat: new Date()
+            },
+            { upsert: true }
+        );
 
-            socket.bot_id = bot_id;
-            socket.emit('registered', { success: true });
-        } catch (error) {
-            console.error('Registration error:', error);
-            socket.emit('registered', { success: false, error: error.message });
-        }
-    });
-
-    // Handle heartbeat
-    socket.on('heartbeat', async (data) => {
-        const { bot_id } = data;
-        try {
-            await Bot.findOneAndUpdate(
-                { bot_id },
-                { 
-                    status: 'active',
-                    last_heartbeat: new Date()
-                }
-            );
-
-            await redisClient.hSet(`bot:${bot_id}`, {
-                status: 'active',
-                last_seen: Date.now()
-            });
-        } catch (error) {
-            console.error('Heartbeat error:', error);
-        }
-    });
-
-    // Handle error reports
-    socket.on('error-report', async (data) => {
-        const { bot_id, error } = data;
-        try {
-            const bot = await Bot.findOne({ bot_id });
-            if (bot) {
-                bot.error_count += 1;
-                bot.recent_errors.push({
-                    timestamp: new Date(),
-                    message: error.message,
-                    level: error.level || 'error'
-                });
-
-                // Keep only the latest MAX_ERROR_LOGS errors
-                if (bot.recent_errors.length > process.env.MAX_ERROR_LOGS) {
-                    bot.recent_errors = bot.recent_errors.slice(-process.env.MAX_ERROR_LOGS);
-                }
-
-                await bot.save();
-                
-                // Update Redis
-                await redisClient.hSet(`bot:${bot_id}`, {
-                    status: 'error',
-                    last_error: error.message
-                });
-            }
-        } catch (error) {
-            console.error('Error report handling error:', error);
-        }
-    });
-
-    // Handle disconnection
-    socket.on('disconnect', async () => {
-        if (socket.bot_id) {
-            try {
-                await Bot.findOneAndUpdate(
-                    { bot_id: socket.bot_id },
-                    { status: 'inactive' }
-                );
-
-                await redisClient.hSet(`bot:${socket.bot_id}`, {
-                    status: 'inactive',
-                    last_seen: Date.now()
-                });
-            } catch (error) {
-                console.error('Disconnect handling error:', error);
-            }
-        }
-        console.log('Client disconnected:', socket.id);
-    });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Registration error:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
 });
 
-// REST API endpoints
-app.get('/api/bots', async (req, res) => {
+apiRouter.post('/health/:bot_id', async (req, res) => {
+    try {
+        const { bot_id } = req.params;
+        const { status, errors } = req.body;
+
+        console.log(`Health check from bot ${bot_id}:`, { status, errors });
+
+        await redisClient.set(`bot:${bot_id}:status`, status);
+        await redisClient.set(`bot:${bot_id}:last_seen`, Date.now());
+
+        if (errors && errors.length > 0) {
+            await redisClient.lPush(`bot:${bot_id}:errors`, ...errors);
+            await redisClient.lTrim(`bot:${bot_id}:errors`, 0, process.env.MAX_ERROR_LOGS - 1);
+        }
+
+        await Bot.findOneAndUpdate(
+            { bot_id },
+            { 
+                status,
+                last_heartbeat: new Date(),
+                ...(errors && { $push: { recent_errors: { 
+                    $each: errors.map(e => ({ message: e, timestamp: new Date() })),
+                    $slice: -process.env.MAX_ERROR_LOGS 
+                }}})
+            }
+        );
+
+        res.json({ success: true });
+    } catch (error) {
+        console.error('Health check error:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+apiRouter.get('/bots', async (req, res) => {
     try {
         const bots = await Bot.find();
         res.json(bots);
     } catch (error) {
+        console.error('Error fetching bots:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
-app.post('/api/bots/:bot_id/command', async (req, res) => {
-    const { bot_id } = req.params;
-    const { command } = req.body;
-
+apiRouter.get('/bots/status', async (req, res) => {
     try {
-        // Emit command to specific bot
-        io.emit(`command:${bot_id}`, { command });
+        const botIds = await redisClient.sMembers('bots:all');
+        
+        const botsStatus = await Promise.all(botIds.map(async (bot_id) => {
+            const status = await redisClient.get(`bot:${bot_id}:status`);
+            const last_seen = await redisClient.get(`bot:${bot_id}:last_seen`);
+            const errors = await redisClient.lRange(`bot:${bot_id}:errors`, 0, 10);
+            
+            return {
+                bot_id,
+                status,
+                last_seen,
+                errors
+            };
+        }));
+
+        res.json(botsStatus);
+    } catch (error) {
+        console.error('Error fetching bot status:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+apiRouter.post('/bots/:bot_id/:command', async (req, res) => {
+    try {
+        const { bot_id, command } = req.params;
+        const botPort = process.env.BOT_PORT || 3002;
+        
+        const botResponse = await fetch(`http://localhost:${botPort}/api/${command}`, {
+            method: 'POST'
+        });
+
+        if (command === 'stop') {
+            await redisClient.set(`bot:${bot_id}:status`, 'inactive');
+        }
+
         res.json({ success: true });
     } catch (error) {
+        console.error('Bot command error:', error);
         res.status(500).json({ error: error.message });
     }
 });
 
+app.use('/api', apiRouter);
+
 const PORT = process.env.BOT_MANAGER_PORT || 3001;
-server.listen(PORT, () => {
+app.listen(PORT, () => {
     console.log(`Bot Manager running on port ${PORT}`);
 }); 
