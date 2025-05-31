@@ -19,20 +19,16 @@ const io = new Server(server, {
 app.use(cors());
 app.use(express.json());
 
-// Connect to Redis and MongoDB
 connectRedis();
 connectDB();
 
-// Socket.IO connection handling
 io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
 
-    // Handle bot registration
     socket.on('register', async (data) => {
         try {
             const { bot_id, name } = data;
             
-            // Update or create bot in MongoDB
             await Bot.findOneAndUpdate(
                 { bot_id },
                 { 
@@ -44,7 +40,6 @@ io.on('connection', (socket) => {
                 { upsert: true }
             );
 
-            // Update Redis
             await redisClient.hSet(`bot:${bot_id}`, {
                 status: 'active',
                 last_seen: Date.now()
@@ -58,7 +53,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle heartbeat
     socket.on('heartbeat', async (data) => {
         const { bot_id } = data;
         try {
@@ -79,7 +73,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle error reports
     socket.on('error-report', async (data) => {
         const { bot_id, error } = data;
         try {
@@ -92,14 +85,12 @@ io.on('connection', (socket) => {
                     level: error.level || 'error'
                 });
 
-                // Keep only the latest MAX_ERROR_LOGS errors
                 if (bot.recent_errors.length > process.env.MAX_ERROR_LOGS) {
                     bot.recent_errors = bot.recent_errors.slice(-process.env.MAX_ERROR_LOGS);
                 }
 
                 await bot.save();
                 
-                // Update Redis
                 await redisClient.hSet(`bot:${bot_id}`, {
                     status: 'error',
                     last_error: error.message
@@ -110,7 +101,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // Handle disconnection
     socket.on('disconnect', async () => {
         if (socket.bot_id) {
             try {
@@ -131,7 +121,6 @@ io.on('connection', (socket) => {
     });
 });
 
-// REST API endpoints
 app.get('/api/bots', async (req, res) => {
     try {
         const bots = await Bot.find();
@@ -146,7 +135,6 @@ app.post('/api/bots/:bot_id/command', async (req, res) => {
     const { command } = req.body;
 
     try {
-        // Emit command to specific bot
         io.emit(`command:${bot_id}`, { command });
         res.json({ success: true });
     } catch (error) {
